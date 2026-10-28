@@ -1,8 +1,14 @@
+using System.Reflection;
+using HarmonyLib;
+
 namespace COTL_API.Saves;
 
 public class ModdedSaveData<T> : BaseModdedSaveData where T : class, new()
 {
+    private static bool? _messagePackCompatible;
+
     private readonly COTLDataReadWriter<T> _dataReadWriter = new();
+    private Action<T, string, bool, bool>? _jsonWriter;
 
     public ModdedSaveData(string guid)
     {
@@ -47,7 +53,7 @@ public class ModdedSaveData<T> : BaseModdedSaveData where T : class, new()
             return;
 
         if (Data != null)
-            _dataReadWriter.Write(Data,
+            Write(Data,
                 MakeSaveSlot(LoadOrder == ModdedSaveLoadOrder.LOAD_AS_SOON_AS_POSSIBLE ? null : SAVE_SLOT), encrypt,
                 backup);
     }
@@ -55,8 +61,65 @@ public class ModdedSaveData<T> : BaseModdedSaveData where T : class, new()
     public override void Saving()
     {
         if (Data != null)
-            _dataReadWriter.Write(Data,
+            Write(Data,
                 MakeSaveSlot(LoadOrder == ModdedSaveLoadOrder.LOAD_AS_SOON_AS_POSSIBLE ? null : SAVE_SLOT));
+    }
+
+    private void Write(T data, string filename, bool encrypt = true, bool backup = true)
+    {
+        var jsonWriter = IsMessagePackCompatible() ? null : GetJsonWriter();
+        if (jsonWriter != null)
+            jsonWriter(data, filename, encrypt, backup);
+        else
+            _dataReadWriter.Write(data, filename, encrypt, backup);
+    }
+
+    //using reflection because of outdated gamelibs, which is not updated in the nuget server
+    private static bool IsMessagePackCompatible()
+    {
+        if (_messagePackCompatible != null) return _messagePackCompatible.Value;
+
+        var optionsType = AccessTools.TypeByName("MPSerialization");
+        var options = optionsType == null ? null : AccessTools.Field(optionsType, "options")?.GetValue(null);
+        var serialize = AccessTools.TypeByName("MessagePack.MessagePackSerializer")?.GetMethods()
+            .FirstOrDefault(method => method is { Name: "Serialize", IsGenericMethodDefinition: true } &&
+                                      method.ReturnType == typeof(byte[]) && method.GetParameters().Length == 3);
+        if (options == null || serialize == null)
+        {
+            _messagePackCompatible = true;
+            return true;
+        }
+
+        try
+        {
+            serialize.MakeGenericMethod(typeof(T)).Invoke(null, [new T(), options, CancellationToken.None]);
+            _messagePackCompatible = true;
+        }
+        catch (TargetInvocationException)
+        {
+            LogWarning($"{typeof(T).FullName} can't be saved as MessagePack, saving it as JSON instead");
+            _messagePackCompatible = false;
+        }
+
+        return _messagePackCompatible.Value;
+    }
+
+    //using reflection because of outdated gamelibs, which is not updated in the nuget server
+    private Action<T, string, bool, bool>? GetJsonWriter()
+    {
+        if (_jsonWriter != null) return _jsonWriter;
+
+        var readWriter = AccessTools.Field(typeof(COTLDataReadWriter<T>), "_readWriter")?.GetValue(_dataReadWriter);
+        var writeJson = readWriter == null ? null : AccessTools.Method(readWriter.GetType(), "WriteJson");
+        if (writeJson == null)
+        {
+            LogError($"Couldn't find the game's JSON writer for {typeof(T).FullName}");
+            return null;
+        }
+
+        _jsonWriter = (Action<T, string, bool, bool>)Delegate.CreateDelegate(
+            typeof(Action<T, string, bool, bool>), readWriter, writeJson);
+        return _jsonWriter;
     }
 
     public override void Load(int? saveSlot = null)

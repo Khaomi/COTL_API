@@ -4,7 +4,7 @@ schemaVersion = "0.0.1"
 [package]
 namespace = "xhayper"
 name = "COTL_API"
-versionNumber = "0.3.4"
+versionNumber = "0.3.5"
 description = "A library to easily interact with Cult of the Lamb"
 websiteUrl = "https://cotl-api.vercel.app/"
 containsNsfwContent = false

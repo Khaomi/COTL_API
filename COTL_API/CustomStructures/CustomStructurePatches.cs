@@ -11,6 +11,7 @@ public partial class CustomStructureManager
     [HarmonyPrefix]
     private static bool StructureBrain_CreateBrain(ref StructureBrain __result, StructuresData data)
     {
+        StructureBrain_ApplyConfigToData(data);
         if (!CustomStructureList.TryGetValue(data.Type, out var value)) return true;
         var t = value.GetType();
         var structureBrain = Activator.CreateInstance(t) as StructureBrain;
@@ -21,6 +22,23 @@ public partial class CustomStructureManager
         StructureManager.StructuresAtLocation(data.Location).Add(structureBrain);
         __result = structureBrain!;
         return false;
+    }
+
+    [HarmonyPatch(typeof(StructureBrain), nameof(StructureBrain.ApplyConfigToData))]
+    [HarmonyPrefix]
+    private static void StructureBrain_ApplyConfigToData(StructuresData data)
+    {
+        var prefabPath = data.PrefabPath;
+        if (prefabPath == null || !prefabPath.Contains("CustomBuildingPrefab_")) return;
+
+        if (CustomStructureList.TryGetValue(data.Type, out var current) &&
+            (current.PrefabPath == prefabPath || $"Assets/{current.PrefabPath}.prefab" == prefabPath)) return;
+
+        var structure = GetStructureByPrefabName(prefabPath);
+        if (structure == null) return;
+
+        LogWarning($"{prefabPath} was saved as {data.Type}, restoring its current id {structure.StructureType}");
+        data.Type = structure.StructureType;
     }
 
     [HarmonyPatch(typeof(StructuresData), nameof(StructuresData.GetInfoByType))]
